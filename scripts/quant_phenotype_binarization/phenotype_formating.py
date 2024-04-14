@@ -2,137 +2,183 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
 
-# Original phenotype phenotype_file name
-phenotype_file = "aggregated_mean.csv"
-genotype_file = "filtered_data.csv"
+# CONSTANT VARIABLES; adjust for your specific phenotype / genotype files characteristics
+phenotype_file = 'aggregated_mean.csv'
+phenotype_file_header_present = 'Y'
+phenotype_file_sampleID_column_index = 0 # index of accesion numbers column in phenotype file (indexing starts from 0)
+phenotype_file_values_column_index = 1 # index of phenotype values column in phenotype file (indexing starts from 0)
 
-# Original phenotype phenotype_file phenotype column number (n-1, for phenotype in 2nd column use number 1)
-phenotype_column_index = 1
-# Original phenotype phenotype_file Accession number column number (n-1, for phenotype in 2nd column use number 1)
-sample_ID_index = 0
-# Original phenotype phenotype_file  column separator (examples: "\t",",",";")
-separator = ","
-# Original phenotype phenotype_file sample name format (G - Grin name format, S - Soy1066 name format , S7 -Soy775 name format )
-namform = "G"
-# Original phenotype type (Qual - qualitative, Quant - quantitative)
-phentyp = "Quant"
-#Header in the Original phenotype phenotype_file ("Y","N")
-header="Y"
+genotype_file = 'filtered_data.csv'
+genotype_file_header_present = 'Y'
+genotype_file_sampleID__column_index = 1 # index of accesion numbers column in genotype file (indexing starts from 0)
+genotype_file_values_column_index = 2 # index of binarised genotype values column in genotype file (indexing starts from 0)
+genotype_file_type_column_index = 3 # index of type column in genotype file (landrace, cultivar ...)
 
-#Result phenotype phenotype_file name
-res = "pheno_res.txt"
-#Result phenotype phenotype_file formate ("AccuCalc","MADis","AccuTool")
-form = "AccuCalc"
+separator = ',' # both genotype and phenotype file should use same separator
 
+function_list = []
+info_strings = []
+def register_with_info(info):
+    ''''Decorator factory that creates a decorator which registers a function and an info string. '''
+    def decorator(function):
+        function_list.append(function)
+        info_strings.append(info)
+        return function
+    return decorator
 
-# creating two dataframes (Phenotype and Sample)
+# FUNCTIONS
 
-phenotype_file = open(phenotype_file,"rt")
+def read_data(file, indices, column_names, separator, header):
+    """
+    Read specific columns from a CSV file and assign new column names.
 
-name_list,phen_list = list(),list()
-n = 0
+    Parameters:
+    - file (str): genotype_file / Phenotype_file
+    - indices (list): List of required columns indices to extract.
+    - column_names (list): List of new names to assign to the columns.
+    - separator (str): Delimiter used in file.
+    - header (str): 'Y' if the file includes a header row, otherwise 'N'.
 
-for line in phenotype_file:
-    if header == "Y" and n == 0: n = 1
-    else:
-        line=line.split(separator)
-        name_list.append(line[sample_ID_index])
-        phen_list.append(line[phenotype_column_index])
+    Returns:
+    - A pandas DataFrame with selected columns and specified column names.
+    """
+    header = 0 if header == 'Y' else None
+    df = pd.read_csv(file, sep=separator, header=header, usecols=indices)
+    df.columns = column_names
+    return df
 
-phenotype_file.close()
+def read_phenotype_data(file, sample_index, phenotype_index, separator, header):
+    '''Read and process the phenotype file data, extracting the required columns into a pandas DataFrame.'''
+    df = read_data(file, [sample_index, phenotype_index], ['Sample', 'Phenotype'], separator, header)
+    df['Phenotype'] = pd.to_numeric(df['Phenotype'], errors='coerce')  # Convert to numeric, coercing errors to NaN
+    return df
 
-df = pd.DataFrame()
-df["Sample"] = name_list
-df["Phenotype"] = phen_list
+def read_genotype_data(file, sample_index, genotype_index, type_index, separator, header):
+    '''Read and process the genotype file data, extracting the required columns into a pandas DataFrame.'''
+    return read_data(file, [sample_index, genotype_index, type_index], ['Sample', 'Genotype', 'type'], separator, header)
 
-
-# Data statistic
-print (f"The phenotype phenotype_file contains {len(df.Phenotype)} samples.")
-
-if phentyp == "Quant":
-    df["Phenotype"]=pd.to_numeric(df["Phenotype"],errors='coerce')
-    first_quartile = df.Phenotype.quantile(0.25)
-    second_quartile = df.Phenotype.quantile(0.5)
-    third_quartile = df.Phenotype.quantile(0.75)
-    max_value = df.Phenotype.max()
+# Data statistics
+def compute_statistics(df):
+    '''Compute statistical parameters for phenotype data and store them into dictionary'''
     min_value = df.Phenotype.min()
-    mean_value = df.Phenotype.mean()
-    delt = max_value - min_value
+    max_value = df.Phenotype.max()
+    range_value = max_value - min_value
 
-    twenty = df.Phenotype.quantile(0.01)
-    thirty = df.Phenotype.quantile(0.40)
-    seventy = df.Phenotype.quantile(0.60)
-    eighty = df.Phenotype.quantile(0.99)
+    return {
+        'min': min_value,
+        'max': max_value,
+        'mean': df.Phenotype.mean(),
+        'median': df.Phenotype.median(),
+        'first_quartile': df.Phenotype.quantile(0.25),
+        'third_quartile': df.Phenotype.quantile(0.75),
+        'range': range_value
+    }
 
-    # phenotype binarisaiton
+# quantitative phenotype binarisation:
 
-    # 1st Approach
-    df['WT/MUT'] = (df['Phenotype'] > second_quartile).astype(int)
+# 1st approach to binarisation
+@register_with_info("Average accuracy using median value for binarisation: ")
+def binarisation_by_median(df, statistics):
+    '''Binarize the phenotype data based on the median.'''
+    df_copy = df.copy() # Create a copy of the DataFrame to avoid modifying the original
+    df_copy['Phenotype'] = (df_copy['Phenotype'] > statistics['median']).astype(int) # overwrite Phenotype values 
+    return df_copy
 
-    df[['Sample', 'WT/MUT']].to_csv('median.csv', index=False)
+# 2nd approach to binarisation
+@register_with_info("Average accuracy using binarisation by extremes defined by 1st quartile and 3rd quartile: ")
+def binarisation_by_extremes(df, statistics):
+    '''
+    Binarize the phenotype data based on defined extreme intervals:
+    - First extreme interval: values from the minimum to the first quartile are classified as 0.
+    - Second extreme interval: values from the third quartile to the maximum are classified as 1.
+    Values outside these intervals are set to -2.
+    '''
+    df_copy = df.copy() # Create a copy of the DataFrame to avoid modifying the original
 
-    # 2nd Approach
     conditions = [
-        df['Phenotype'] < first_quartile, # zeros - we take 0-25% of values
-        df['Phenotype'] > third_quartile # ones - we take 75-100% of values
+    df_copy['Phenotype'] < statistics['first_quartile'], # zeros
+    df_copy['Phenotype'] > statistics['third_quartile'] # ones
     ]
-    choices = [0, 1]  # Corresponding values for the conditions above
+    choices = [0, 1] # Values to assign based on the conditions
 
-    # we take conditions and apply choices to "Extremes" by those conditions, 
-    # if no record in condition, we set value to NaN
-    df['WT/MUT'] = np.select(conditions, choices, default = -2) 
+    # Apply conditions to the data, setting out-of-range values to -2
+    df_copy['Phenotype'] = np.select(conditions, choices, default = -2)
+    return df_copy
 
-    #df['WT/MUT'] = df['WT/MUT'].astype(int) # convert float type to int
-    df[['Sample', 'WT/MUT']].to_csv('extremes.csv', index=False) 
+# 3rd approach to binarisation
+@register_with_info(f"Average accuracy using 1st quartile value for binarisation: ")
+def binarisation_by_first_quartile(df, statistics):
+    '''Binarize the phenotype data based on the first quartile.'''
+    df_copy = df.copy() # Create a copy of the DataFrame to avoid modifying the original
+    df_copy['Phenotype'] = (df_copy['Phenotype'] > statistics['first_quartile']).astype(int)
+    return df_copy
 
-    # 3rd Approach
-    df['WT/MUT'] = (df['Phenotype'] > first_quartile).astype(int)
-    df[['Sample', 'WT/MUT']].to_csv('first_quartile.csv', index=False)
-    # 4th Approach
-    df['WT/MUT'] = (df['Phenotype'] > third_quartile).astype(int)
-    df[['Sample', 'WT/MUT']].to_csv('third_quartile.csv', index=False)
+# 4th approach to binarisation
+@register_with_info("Average accuracy using 3rd quartile value for binarisation: ")
+def binarisation_by_third_quartile(df, statistics):
+    '''Binarize the phenotype data based on the third quartile.'''
+    df_copy = df.copy() # Create a copy of the DataFrame to avoid modifying the original
+    df_copy['Phenotype'] = (df_copy['Phenotype'] > statistics['third_quartile']).astype(int)
+    return df_copy
 
-    # 5th approach
-    conditions = [
-        (df['Phenotype'] > twenty) & (df['Phenotype'] < thirty),  # zeros - we take 20 - 30% of values
-        (df['Phenotype'] > seventy) & (df['Phenotype'] < eighty)  # ones - we take 75-100% of values
-    ]
+# 5th approach
+def binarisation_combinations (genotype_df, phenotype_df):
+    '''
+    Evaluates and identifies the best binarization method for phenotype data based on quantile intervals to maximize the correspondence with binarized genotype data.
+    The function explores all possible pairs of quantile intervals (excluding identical pairs) to determine which combination yields the highest accuracy. 
+       The size of the interval for quantile division is determined by the 'interval' variable, which accepts values that evenly divide 100 (e.g., 5, 10, 20, 25, 50).
+       We store the average accuracy values of all the combinations in a dictionary and then pick the best value.   
+    '''
+    df_copy = phenotype_df.copy() # df_copy is a copy of the phenotype DataFrame to avoid modifying the original
+    combinations_for_binarisation_dict = dict()
+    interval = 10
+    dictionary_index = 0
+    for segment_zeros in range(0, 100, interval):
+        for segment_ones in range(0, 100, interval):
+            if segment_zeros == segment_ones:
+                continue
+            else:
+                zeros_quantil_start = segment_zeros / 100
+                zeros_quantil_end = (segment_zeros + interval) / 100
+                ones_quantil_start = segment_ones / 100
+                ones_quantil_end = (segment_ones + interval) / 100
 
-    choices = [0, 1]  # Corresponding values for the conditions above
+                conditions = [
+                    (df_copy['Phenotype'] > df_copy.Phenotype.quantile(zeros_quantil_start)) & (df_copy['Phenotype'] < df_copy.Phenotype.quantile(zeros_quantil_end)),
+                    (df_copy['Phenotype'] >  df_copy.Phenotype.quantile(ones_quantil_start)) & (df_copy['Phenotype'] < df_copy.Phenotype.quantile(ones_quantil_end))
+                    ]
+                choices = [0, 1]  # Corresponding values for the conditions above
+                
+                df_copy2 = df_copy.copy() # Create second copy to store binarised phenotype. 1st copy is used for other combinations
+                df_copy2['Phenotype'] = np.select(conditions, choices, default = -2)
 
-    df['WT/MUT'] = np.select(conditions, choices, default= "NaN")
-    df[['Sample', 'WT/MUT']].to_csv('skuska.csv', index=False)
+                #df_copy['Binarized Phenotype'] = np.select(conditions, choices, default=-2)
+                # Forming the string
+                info_string = f"Borders of 0s: {zeros_quantil_start}, {zeros_quantil_end} \nborders of 1s: {ones_quantil_start}, {ones_quantil_end}"
 
+                # Updating the dictionary with a tuple containing the dataframe slice and the string
+                combinations_for_binarisation_dict.update({ dictionary_index: (df_copy2, info_string)})
+                dictionary_index += 1
+                
+    accuracies = dict()
+    for key, value in combinations_for_binarisation_dict.items():
+        # value is a tuple where value[0] is the dataframe and value[1] is the string
+        accuracy = average_accuracy_from_dataframes(genotype_df, value[0])
+        accuracies.update({key: accuracy})
 
+    key_with_highest_value = max(accuracies, key=accuracies.get)
+    value_best = combinations_for_binarisation_dict[key_with_highest_value]
+    print(f'Key with the highest value: {key_with_highest_value}, Value: {accuracies[key_with_highest_value]}, {value_best[1]}')
 
-
-    print (f"The minimal value of the trait is {min_value} and the maximal value is {max_value}.")
-    print (f"The average of the trait is {mean_value} and the median value is {second_quartile}.")
-    print (f"The 25% quantile (1st) of the trait is {first_quartile} and the 75% quantile (3rd) of is {third_quartile}.")
-
-    if delt <3:plt.hist(df.Phenotype, bins = 20)
-    elif delt <5:plt.hist(df.Phenotype, bins = 30)
-    elif delt <7:plt.hist(df.Phenotype, bins = 50)
-    elif delt <9:plt.hist(df.Phenotype, bins = 70)
-    else:plt.hist(df.Phenotype, bins = 100)
-    plt.savefig("histogram.png", dpi=300, bbox_inches='tight')
-    plt.show()
-else: 
-    raise Exception("Incorrect phenotype format type.")
-
-
-# average accuracy 
-def average_accuracy(genotype_file, phenotype_file, separator=',', header=True):
-    if header: header_val = 0 
-    else: header_val = None
-    
-    # load csv files (phenotype, genotype) into dataframe
-    df_genotype = pd.read_csv(genotype_file, sep=separator, header=header_val, names=["Soy2939", "GRIN_Accession", "Genotype"])
-    df_phenotype = pd.read_csv(phenotype_file, sep=separator, header=header_val, names=["GRIN_Accession", "Phenotype"])
-    
+def average_accuracy_from_dataframes(genotype_dataframe, phenotype_dataframe):
+    '''
+    Compute the average accuracy of genotype-phenotype associations for mutant and wild type classes.
+    accuracy formula: average accuracy = (MUT_acc + WT_acc) / 2
+    MUT_acc - accuracy of correct mutant genotye - mutant fenotype association (1/1)
+    WT_acc accuracy of correct wild type genotype - wild type phenotype association (0/0)
+    '''
     # Merge the dataframes on the 'GRIN_Accession' column
-    merged_df = pd.merge(df_genotype, df_phenotype, on="GRIN_Accession")
-    merged_df.to_csv('merged.csv', index=False)
+    merged_df = pd.merge(genotype_dataframe, phenotype_dataframe, on='Sample')
 
     # formulas needed for average accuracy
     N_WTcorrect = len(merged_df[(merged_df["Genotype"] == 0) & (merged_df["Phenotype"] == 0)])
@@ -145,116 +191,114 @@ def average_accuracy(genotype_file, phenotype_file, separator=',', header=True):
 
     # average accuracy formula
     return (acc_MUT + acc_WT) / 2
+
+def histogram(df):
+    ''' Create and plot the histogram for the phenotype data '''
+    bin_edges = np.histogram_bin_edges(phenotype_df['Phenotype'].dropna(), bins='auto')  # calculates the optimal number of bins based on the data
+
+    # Plot histogram
+    plt.figure(figsize=(10, 6))
+    plt.hist(phenotype_df['Phenotype'], bins=bin_edges, color='#93BFCF', edgecolor='#6096B4', histtype='stepfilled', linewidth=1.5, alpha=0.8)
+
+    # Add grid, labels, and title
+    plt.grid(True, which='both', linestyle='--', linewidth=0.5)
+    plt.xlabel('Phenotype Values')
+    plt.ylabel('Frequency')
+    plt.title('Distribution of trait values')
+
+    # Save and show the plot
+    plt.savefig("histogram.png", dpi=300, bbox_inches='tight')
+    plt.show()
+
+
+def boxplot(genotype_df, phenotype_df):
+    '''
+    Visualize the distribution of phenotype values for accessions with 
+    reference and alternative genotypes.
+    '''
+    genotype_df.to_csv('genotype.csv',  index=False)
+    phenotype_df.to_csv('phenotype.csv',  index=False)
+
+    merged_df = pd.merge(genotype_df, phenotype_df, on='Sample')
+    merged_df.to_csv('boxplot_data.csv',  index=False)
+
+
+    # Create a figure and a set of subplots
+    fig, ax = plt.subplots()
+
+    # Predefining required properties of boxplot (the box, median line, whiskers and caps appearance)
+    box_properties = dict(linestyle='-', linewidth=3, color='#6096B4', facecolor='#93BFCF', alpha=0.4)
+    median_properties = dict(linestyle='-', linewidth=2.5, color='firebrick')
+    whisker_properties = dict(linestyle='-', linewidth=3, color='#6097B466')
+    caps_properties = dict(linestyle='-', linewidth=3, color='#6097B466')
+
+    # This creates the boxplot with the properties for box and median
+    # 'patch_artist' must be set on True for properties like facecolor and alpha to work
+    bp = merged_df.boxplot(column='Phenotype', by='Genotype', ax=ax, boxprops=box_properties, medianprops=median_properties, whiskerprops = whisker_properties, capprops = caps_properties, showfliers=False, patch_artist=True)
+
+    conditions = [
+                (merged_df['type'] == 'Elite'),
+                (merged_df['type'] == 'G. soja'),
+                (merged_df['type'] == 'Genetic'),
+                (merged_df['type'] == 'Landrace')
+                ]
+    choices = ['blue', 'green', 'red', 'purple']  # Corresponding values for the conditions above
     
-avg = average_accuracy(genotype_file, "median.csv")
-print (f"Average accuracy using median method for phenotype binarisation is: {avg}.")
+    merged_df['color'] = np.select(conditions, choices, default = 'black')
 
-avg = average_accuracy(genotype_file, "extremes.csv")
-print (f"Average accuracy using extremes method for phenotype binarisation is: {avg}.")
+    # Adding jitter and  generating correct boxplots columns labels
+    # create 2 groups based on genotype 
+    # - Group 1: reference genotype rows
+    # - Group 2: alternative genotype rows
+    # enumerate encapsulates all objects (DataFrameGroupBy) merged_df.groupby returns (In this case 2 objects: Both objects contain two values (key, group)
+    name_setter = [] # list for labels describing a boxplot ('reference', 'alternative')
+    name_setter_index = [] # correct indexes for titles, boxplots are indexed from 1, because index 0 belongs to y ax
+    for i, (key, group) in enumerate(merged_df.groupby('Genotype')):
+         # Append labels and indices
+        if key == 0:
+            name_setter.append(f'Reference Genotype ({key})')
+            name_setter_index.append(i + 1)
+        elif key == 1:
+            name_setter.append(f'Alternative Genotype ({key})')
+            name_setter_index.append(i + 1)
 
-avg = average_accuracy(genotype_file, "first_quartile.csv")
-print (f"Average accuracy using first_quartile method for phenotype binarisation is: {avg}.")
+        # jitered x values:
+        x = np.random.normal(i + 1, 0.017, size=len(group))
+        ax.scatter(x, group['Phenotype'], alpha=0.5, color=group['color'], edgecolor='none')
 
-avg = average_accuracy(genotype_file, "third_quartile.csv")
-print (f"Average accuracy using third_quartile method for phenotype binarisation is: {avg}.")
+    # Additional plot formatting
+    ax.set_title('Phenotype Distribution for accesions with reference and alternative genotype')
+    plt.suptitle('')  # Removes the 'Group By' title
+    plt.xlabel('')
+    plt.ylabel('Phenotype Value')
+    plt.xticks(name_setter_index, name_setter)  # Sets custom x-axis labels
 
-avg = average_accuracy(genotype_file, "skuska.csv")
-print (f"Average accuracy using skuska method for phenotype binarisation is: {avg}.")
+    # Show the plot
+    plt.show()
 
+# _____________________________________________ MAIN ___________________________________________
 
-phenotype_file = open(genotype_file,"rt")
+# load the data from phenotype and genotype file into dataframe
 
-n_list, g_list = list(), list()
-for line in phenotype_file:
-        line=line.split(separator)
-        line[2].strip()
-        if line[2] == "0\n":
-            n_list.append(line[1])
-            g_list.append(line[2].strip())
-
-phenotype_file.close()
-
-dtf = pd.DataFrame()
-dtf["GRIN_Accession"] = n_list
-dtf["refgef"] = g_list
-dtf[['GRIN_Accession', 'refgef']].to_csv('ref.csv', index=False)
-
-
-dtf_phenotype = pd.read_csv("aggregated_mean.csv", sep = separator, header = 0, names = ["GRIN_Accession", "Phenotype"])
-
-merged_dtf = pd.merge(dtf[['GRIN_Accession', 'refgef']], dtf_phenotype, on="GRIN_Accession")
-merged_dtf.to_csv('joooj.csv', index=False)
-
-max_value = merged_dtf.Phenotype.max()
-min_value = merged_dtf.Phenotype.min()
-print(max_value)
-print(min_value)
+phenotype_df = read_phenotype_data(phenotype_file, phenotype_file_sampleID_column_index, phenotype_file_values_column_index, separator, phenotype_file_header_present)
+binarised_genotype_df = read_genotype_data(genotype_file, genotype_file_sampleID__column_index, genotype_file_values_column_index, genotype_file_type_column_index, separator, genotype_file_header_present)
 
 
-#       skuska
-def average_accuracy_from_dataframe(genotype_df, phenotype_df):
-    # Merge the dataframes on the 'GRIN_Accession' column
-    merged_df = pd.merge(genotype_df, phenotype_df, on="GRIN_Accession")
+stats = compute_statistics(phenotype_df)
 
-    # formulas needed for average accuracy
-    N_WTcorrect = len(merged_df[(merged_df["Genotype"] == 0) & (merged_df["WT/MUT"] == 0)])
-    N_WTincorrect = len(merged_df[(merged_df["Genotype"] == 0) & (merged_df["WT/MUT"] == 1)])
-    acc_WT = (N_WTcorrect / (N_WTcorrect + N_WTincorrect)) * 100
+for function, info in zip(function_list, info_strings):
+    binarised_phenotype_df = function(phenotype_df, stats)
+    avg = average_accuracy_from_dataframes(binarised_genotype_df, binarised_phenotype_df)
+    print(f'{info}{avg:.2f}%')
 
-    N_MUTcorrect = len(merged_df[(merged_df["Genotype"] == 1) & (merged_df["WT/MUT"] == 1)])
-    N_MUTincorrect = len(merged_df[(merged_df["Genotype"] == 1) & (merged_df["WT/MUT"] == 0)])
-    acc_MUT = (N_MUTcorrect / (N_MUTcorrect + N_MUTincorrect)) * 100
-
-    # average accuracy formula
-    return (acc_MUT + acc_WT) / 2
-
-def binarisation_combinations (phenotype_csv):
-    phenotype_dataframe = pd.read_csv(phenotype_csv, sep = separator, header = 0, names = ["GRIN_Accession", "Phenotype"])
-    combinations_for_binarisation_dict = dict()
-    interval = 50
-    dictionary_index = 0
-    for segment_zeros in range(0, 100, interval):
-        for segment_ones in range(0, 100, interval):
-            if segment_zeros == segment_ones:
-                continue
-            else:
-                zeros_quantil = segment_zeros / 100
-                zeros_quantil_end = (segment_zeros + interval) / 100
-                ones_quantil = segment_ones / 100
-                ones_quantil_end = (segment_ones + interval) / 100
-
-                conditions = [
-                    (phenotype_dataframe['Phenotype'] > phenotype_dataframe.Phenotype.quantile(zeros_quantil)) & (phenotype_dataframe['Phenotype'] < phenotype_dataframe.Phenotype.quantile(zeros_quantil_end)),
-                    (phenotype_dataframe['Phenotype'] >  phenotype_dataframe.Phenotype.quantile(ones_quantil)) & (phenotype_dataframe['Phenotype'] < phenotype_dataframe.Phenotype.quantile(ones_quantil_end)) # ones - we take 75-100% of values
-                    ]
-                choices = [0, 1]  # Corresponding values for the conditions above
-
-                phenotype_dataframe['WT/MUT'] = np.select(conditions, choices, default = -2) # check if correct data are saved
-
-                dataframe_phenotype_copy = phenotype_dataframe[["GRIN_Accession", "WT/MUT"]].copy()
-                # if dictionary_index % 10 == 0:
-                #         dataframe_phenotype_copy.to_csv(f'ukazka{dictionary_index}.csv', index=False)
-
-
-                # Forming the string
-                info_string = f"Borders of 0s: {zeros_quantil}, {zeros_quantil_end} \nborders of 1s: {ones_quantil}, {ones_quantil_end}"
-
-                # Updating the dictionary with a tuple containing the dataframe slice and the string
-                combinations_for_binarisation_dict.update({ dictionary_index: (dataframe_phenotype_copy, info_string)})
-                dictionary_index += 1
-
-                #print(f"Borders of 0s: {zeros_quantil}, {zeros_quantil_end} \nborders of 1s: {ones_quantil}, {ones_quantil_end}\n")
-    genotype_dataframe = pd.read_csv(genotype_file, sep=separator, header = 0, names=["Soy2939", "GRIN_Accession", "Genotype"])
-
-    accuracies = dict()
-    for key, value in combinations_for_binarisation_dict.items():
-        # value is a tuple where value[0] is the dataframe and value[1] is the string
-        accuracy = average_accuracy_from_dataframe(genotype_dataframe, value[0])
-        accuracies.update({key: accuracy})
-
-    key_with_highest_value = max(accuracies, key=accuracies.get)
-    value_best = combinations_for_binarisation_dict[key_with_highest_value]
-    print(f'Key with the highest value: {key_with_highest_value}, Value: {accuracies[key_with_highest_value]}, {value_best[1]}')
-
-
-binarisation_combinations("aggregated_mean.csv")
+binarisation_combinations(binarised_genotype_df, phenotype_df)
+# OUTPUT
+histogram(phenotype_df)
+boxplot(binarised_genotype_df, phenotype_df)
+print(f"The phenotype file contains {len(phenotype_df.Phenotype)} samples.")
+print(f"The MINIMAL VALUE of the trait is:   {stats['min']:.2f}.")
+print(f"The MAXIMAL VALUE of the trait is:   {stats['max']:.2f}.")
+print(f"The AVERAGE VALUE of the trait is:   {stats['mean']:.2f}.")
+print(f"The MEDIAN VALUE of the trait is:    {stats['median']:.2f}.")
+print(f"The 1ST QUARTILE of the trait is:    {stats['first_quartile']:.2f}.")
+print(f"The 3RD QUARTILE of the trait is:    {stats['third_quartile']:.2f}.")
