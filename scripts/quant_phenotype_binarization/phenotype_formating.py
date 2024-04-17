@@ -194,57 +194,123 @@ def average_accuracy_from_dataframes(genotype_dataframe, phenotype_dataframe):
 
 def histogram(df):
     ''' Create and plot the histogram for the phenotype data '''
-    bin_edges = np.histogram_bin_edges(phenotype_df['Phenotype'].dropna(), bins='auto')  # calculates the optimal number of bins based on the data
+    
+    # We will also analyze the distribution, if the distribution is multimodal we want to detect modes and local maxims/ minims 
+    def gaussian_kernel(u):
+        '''
+        Function to calculate Gaussian kernel for each element in array 'u'
+        Gaussian Kernel formula: K(u) = (1 / sqrt(2π)) * exp(-0.5 * u^2)
+        - 'u' represents the normalized distances between data points and the 
+        evaluation point, scaled by the bandwidth.
+        returns: An array of Gaussian kernel values corresponding to each distance in 'u'
+        '''
+        return (1 / np.sqrt(2 * np.pi)) * np.exp(-0.5 * u**2)  # The Kernel function formula (Gaussian kernel is a common choice)
+    
+    def kernel_density_estimation(data, x_grid, bandwidth):
+        '''
+        Function to calculate the Kernel Density Estimation (KDE) over a set of points
+        formula: f(x) = (1 / (n * h)) * Σ K((x - xi) / h)
+        KDE formula: f(x) = (1 / (n * bandwidth)) * Σ K((x - xi) / bandwidth)
+        returns: KDE values evaluated at each point in x_grid.
+        '''
+        u = (x_grid[:, None] - data) / bandwidth # 2D array of distances, each row represents a grid point and each column represents a data point
+        contributions = gaussian_kernel(u) # 2D array, row represents a grid point, column represents a data point and each element represents an influence of data point to grid point
+        kde_values = np.sum(contributions, axis=1) / (len(data) * bandwidth) # Sum these kernel values across data points (columns) for each grid point (rows).
+        kde_values /= (np.sum(kde_values) * (x_grid[1] - x_grid[0])) # normalization to construct PDF (probability density function)
+        return kde_values
 
-    # Plot histogram
+    data = phenotype_df['Phenotype'].dropna().values
+    
+    # Example data generation
+    # x = np.linspace(0, 10, 1000)
+    # y = np.sin(x) * 100 + np.random.normal(0, 10, 1000)
+    # data = y + np.random.normal(0, 30, 1000)
+
+    # Preparation for KDE evaluations
+    x_grid = np.linspace(data.min() - 1, data.max() + 1, 1000) # set of points for KDE evaluation (we cover the whole range of data)
+    bandwidth= np.std(data) * np.power(4/(3*len(data)), 1/5)  # Silverman's rule of thumb for bandwidth selection; higher bandwidth = less sensitive, lower bandwidth = more sensitive to 'peaks' that do not represent modes but rather are minor fluctuations in data
+    
+    # KDE calculation
+    kde_values = kernel_density_estimation(data, x_grid, bandwidth) # array of n elements
+
+    # Histogram calculations
+    counts, bin_edges = np.histogram(data, bins='auto', density=True)  
+    bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
+
+    # plot histogram
     plt.figure(figsize=(10, 6))
-    plt.hist(phenotype_df['Phenotype'], bins=bin_edges, color='#93BFCF', edgecolor='#6096B4', histtype='stepfilled', linewidth=1.5, alpha=0.8)
+    plt.hist(data, bins=bin_edges, density=True, color='#93BFCF', edgecolor='#6096B4', histtype='stepfilled', linewidth=1.5, alpha=0.8, label='Histogram')
+    plt.plot(x_grid, kde_values, label='KDE', color='firebrick', linewidth=2, alpha=0.4) #plotting the KDE function
+    
+    # Peak and modes detection using the first derivative of KDE
+    kde_diff = np.diff(kde_values)  # First derivative of the KDE function, array of n-1 values representing differences
+    # chceking where the sign of derivation changes (element-wise product of consecutive derivative values is negative and check if first value of pair was positive which means function was increasing before it started decreasing = peak )
+    peaks = (kde_diff[:-1] * kde_diff[1:] < 0) & (kde_diff[:-1] > 0) # produces a boolean array where True symbolizes a detected peak
+    peak_x = x_grid[1:-1][peaks]  # Align x_grid with peaks
+
+    # Histogram peak refinement around KDE peaks
+    search_radius = 2  # Adjusted search radius: number of bins to search around the KDE peak
+    peak_indices = np.digitize(peak_x, bin_edges) - 1 # add the KDE x values for peaks to corresponding histogram bins
+    refined_peaks = [] # array for the potential highest peaks in the modes
+    for idx in peak_indices:
+        local_indices = range(max(0, idx - search_radius), min(len(bin_centers), idx + search_radius + 1)) # bins around the detected peaks (the area ranges from detected peak -  search radius to detected peak +search radius)
+        local_max = np.argmax(counts[local_indices]) # returns the index of highest bin in the searched area
+        if counts[local_indices[local_max]] > max(counts)*0.03:
+            refined_peaks.append(local_indices[local_max]) # add the indices to the array that is later used for plotting the peak dot
+        
+    # Plot refined histogram peaks
+    plt.scatter(bin_centers[refined_peaks], counts[refined_peaks], color='green', label='Refined Histogram Peaks')
 
     # Add grid, labels, and title
     plt.grid(True, which='both', linestyle='--', linewidth=0.5)
     plt.xlabel('Phenotype Values')
     plt.ylabel('Frequency')
     plt.title('Distribution of trait values')
-
-    # Save and show the plot
     plt.savefig("histogram.png", dpi=300, bbox_inches='tight')
     plt.show()
-
+    print(f'Detected number of modes in histogram is: {len(refined_peaks)} with the peak frequency values:{counts[refined_peaks]}.')
 
 def boxplot(genotype_df, phenotype_df):
     '''
     Visualize the distribution of phenotype values for accessions with 
-    reference and alternative genotypes.
+    reference (0) and alternative (1) genotypes.
     '''
-    genotype_df.to_csv('genotype.csv',  index=False)
-    phenotype_df.to_csv('phenotype.csv',  index=False)
-
     merged_df = pd.merge(genotype_df, phenotype_df, on='Sample')
-    merged_df.to_csv('boxplot_data.csv',  index=False)
-
 
     # Create a figure and a set of subplots
-    fig, ax = plt.subplots()
+    fig, ax = plt.subplots(figsize=(15, 10))
 
-    # Predefining required properties of boxplot (the box, median line, whiskers and caps appearance)
-    box_properties = dict(linestyle='-', linewidth=3, color='#6096B4', facecolor='#93BFCF', alpha=0.4)
+    # Predefining required properties for boxplot: the box and median line, (whiskers and caps can be added too)
+    box_properties = dict(linestyle='-', linewidth=2, color='#6096B4', facecolor='#93BFCF', alpha=0.5)
     median_properties = dict(linestyle='-', linewidth=2.5, color='firebrick')
-    whisker_properties = dict(linestyle='-', linewidth=3, color='#6097B466')
-    caps_properties = dict(linestyle='-', linewidth=3, color='#6097B466')
+    # whisker_properties = dict(linestyle='-', linewidth=3, color='#6097B466')
+    # caps_properties = dict(linestyle='-', linewidth=3, color='#6097B466')
 
-    # This creates the boxplot with the properties for box and median
+    # Create the boxplot with the properties for box and median
     # 'patch_artist' must be set on True for properties like facecolor and alpha to work
-    bp = merged_df.boxplot(column='Phenotype', by='Genotype', ax=ax, boxprops=box_properties, medianprops=median_properties, whiskerprops = whisker_properties, capprops = caps_properties, showfliers=False, patch_artist=True)
-
+    bp = merged_df.boxplot(
+        column='Phenotype',
+        by='Genotype',
+        ax=ax,
+        boxprops=box_properties, 
+        medianprops=median_properties,
+        showfliers=False,
+        showcaps=False,
+        whis = 0,
+        patch_artist=True,
+        )
+    
+    # use another color for each type of accesions
     conditions = [
                 (merged_df['type'] == 'Elite'),
                 (merged_df['type'] == 'G. soja'),
                 (merged_df['type'] == 'Genetic'),
                 (merged_df['type'] == 'Landrace')
                 ]
-    choices = ['blue', 'green', 'red', 'purple']  # Corresponding values for the conditions above
+    choices = ['blue', 'green', 'red', 'darkviolet']  # Corresponding values for the types above
     
     merged_df['color'] = np.select(conditions, choices, default = 'black')
+    
 
     # Adding jitter and  generating correct boxplots columns labels
     # create 2 groups based on genotype 
@@ -263,10 +329,19 @@ def boxplot(genotype_df, phenotype_df):
             name_setter_index.append(i + 1)
 
         # jitered x values:
-        x = np.random.normal(i + 1, 0.017, size=len(group))
+        x = np.random.normal(i + 1, 0.02, size=len(group))
         ax.scatter(x, group['Phenotype'], alpha=0.5, color=group['color'], edgecolor='none')
 
-    # Additional plot formatting
+    #adding a legend
+    legend_elements = [
+        plt.Line2D([0], [0], marker='o', color='w', label='Elite', markerfacecolor='blue', markersize=10),
+        plt.Line2D([0], [0], marker='o', color='w', label='G. soja', markerfacecolor='green', markersize=10),
+        plt.Line2D([0], [0], marker='o', color='w', label='Genetic', markerfacecolor='red', markersize=10),
+        plt.Line2D([0], [0], marker='o', color='w', label='Landrace', markerfacecolor='purple', markersize=10)
+    ]
+    ax.legend(handles=legend_elements, loc='upper right', fontsize='large')
+
+    # additional plot formatting
     ax.set_title('Phenotype Distribution for accesions with reference and alternative genotype')
     plt.suptitle('')  # Removes the 'Group By' title
     plt.xlabel('')
@@ -274,14 +349,20 @@ def boxplot(genotype_df, phenotype_df):
     plt.xticks(name_setter_index, name_setter)  # Sets custom x-axis labels
 
     # Show the plot
+    plt.savefig("boxplot.png", dpi=300, bbox_inches='tight')
     plt.show()
+
+
 
 # _____________________________________________ MAIN ___________________________________________
 
 # load the data from phenotype and genotype file into dataframe
 
 phenotype_df = read_phenotype_data(phenotype_file, phenotype_file_sampleID_column_index, phenotype_file_values_column_index, separator, phenotype_file_header_present)
+phenotype_df.to_csv('fenotyp.csv', index=False)
+
 binarised_genotype_df = read_genotype_data(genotype_file, genotype_file_sampleID__column_index, genotype_file_values_column_index, genotype_file_type_column_index, separator, genotype_file_header_present)
+binarised_genotype_df.to_csv('genotyp.csv', index=False)
 
 
 stats = compute_statistics(phenotype_df)
@@ -292,9 +373,17 @@ for function, info in zip(function_list, info_strings):
     print(f'{info}{avg:.2f}%')
 
 binarisation_combinations(binarised_genotype_df, phenotype_df)
+
+# checking how many genotype file accesions do not have match in phenotype file
+mask = ~binarised_genotype_df['Sample'].isin(phenotype_df['Sample'])
+result_df = binarised_genotype_df[mask]
+accesions_without_phenotype = len(result_df)
+
 # OUTPUT
 histogram(phenotype_df)
 boxplot(binarised_genotype_df, phenotype_df)
+
+print(f'Number of accesions that coul not be matched to phenotype value: {accesions_without_phenotype}.')
 print(f"The phenotype file contains {len(phenotype_df.Phenotype)} samples.")
 print(f"The MINIMAL VALUE of the trait is:   {stats['min']:.2f}.")
 print(f"The MAXIMAL VALUE of the trait is:   {stats['max']:.2f}.")
@@ -302,3 +391,4 @@ print(f"The AVERAGE VALUE of the trait is:   {stats['mean']:.2f}.")
 print(f"The MEDIAN VALUE of the trait is:    {stats['median']:.2f}.")
 print(f"The 1ST QUARTILE of the trait is:    {stats['first_quartile']:.2f}.")
 print(f"The 3RD QUARTILE of the trait is:    {stats['third_quartile']:.2f}.")
+
