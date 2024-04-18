@@ -193,7 +193,7 @@ def average_accuracy_from_dataframes(genotype_dataframe, phenotype_dataframe):
     return (acc_MUT + acc_WT) / 2
 
 def histogram(df):
-    ''' Create and plot the histogram for the phenotype data '''
+    ''' Create and plot the histogram for the phenotype data and analyze number of modes and the local maximums'''
     
     # We will also analyze the distribution, if the distribution is multimodal we want to detect modes and local maxims/ minims 
     def gaussian_kernel(u):
@@ -233,20 +233,22 @@ def histogram(df):
     # KDE calculation
     kde_values = kernel_density_estimation(data, x_grid, bandwidth) # array of n elements
 
-    # Histogram calculations
-    counts, bin_edges = np.histogram(data, bins='auto', density=True)  
+    # Histogram and KDE function calculations
+    counts, bin_edges = np.histogram(data, bins='auto')  
     bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
+    bin_width = bin_edges[1] - bin_edges[0]
+    kde_values = kde_values * len(data) * bin_width  # scale kde values, becaus it is a probability density function, but we represent histogram by counts of accesions in each bin not the probability
 
-    # plot histogram
+    # plot histogram and approximation line
     plt.figure(figsize=(10, 6))
-    plt.hist(data, bins=bin_edges, density=True, color='#93BFCF', edgecolor='#6096B4', histtype='stepfilled', linewidth=1.5, alpha=0.8, label='Histogram')
-    plt.plot(x_grid, kde_values, label='KDE', color='firebrick', linewidth=2, alpha=0.4) #plotting the KDE function
+    plt.hist(data, bins=bin_edges, color='#93BFCF', edgecolor='#6096B4', histtype='stepfilled', linewidth=1.5, alpha=0.5, label='Histogram') # plotting histogram
+    plt.plot(x_grid, kde_values, color='green', linewidth=3, alpha=0.3, label = 'scaled KDE to approximate histogram modes') # plotting the KDE function
     
     # Peak and modes detection using the first derivative of KDE
     kde_diff = np.diff(kde_values)  # First derivative of the KDE function, array of n-1 values representing differences
     # chceking where the sign of derivation changes (element-wise product of consecutive derivative values is negative and check if first value of pair was positive which means function was increasing before it started decreasing = peak )
     peaks = (kde_diff[:-1] * kde_diff[1:] < 0) & (kde_diff[:-1] > 0) # produces a boolean array where True symbolizes a detected peak
-    peak_x = x_grid[1:-1][peaks]  # Align x_grid with peaks
+    peak_x = x_grid[1:-1][peaks]  # Align x_grid with peaks to obtain x indices of the peaks
 
     # Histogram peak refinement around KDE peaks
     search_radius = 2  # Adjusted search radius: number of bins to search around the KDE peak
@@ -255,13 +257,14 @@ def histogram(df):
     for idx in peak_indices:
         local_indices = range(max(0, idx - search_radius), min(len(bin_centers), idx + search_radius + 1)) # bins around the detected peaks (the area ranges from detected peak -  search radius to detected peak +search radius)
         local_max = np.argmax(counts[local_indices]) # returns the index of highest bin in the searched area
-        if counts[local_indices[local_max]] > max(counts)*0.03:
+        if counts[local_indices[local_max]] > max(counts)*0.03: # treshhold, dont consider peaks smaller than 3 % of the highest peak
             refined_peaks.append(local_indices[local_max]) # add the indices to the array that is later used for plotting the peak dot
         
     # Plot refined histogram peaks
-    plt.scatter(bin_centers[refined_peaks], counts[refined_peaks], color='green', label='Refined Histogram Peaks')
+    plt.scatter(bin_centers[refined_peaks], counts[refined_peaks], color='green', label='Histogram Peaks')
 
     # Add grid, labels, and title
+    plt.legend()
     plt.grid(True, which='both', linestyle='--', linewidth=0.5)
     plt.xlabel('Phenotype Values')
     plt.ylabel('Frequency')
@@ -319,14 +322,16 @@ def boxplot(genotype_df, phenotype_df):
     # enumerate encapsulates all objects (DataFrameGroupBy) merged_df.groupby returns (In this case 2 objects: Both objects contain two values (key, group)
     name_setter = [] # list for labels describing a boxplot ('reference', 'alternative')
     name_setter_index = [] # correct indexes for titles, boxplots are indexed from 1, because index 0 belongs to y ax
+    counts_per_group = []  # Store counts to display later
     for i, (key, group) in enumerate(merged_df.groupby('Genotype')):
          # Append labels and indices
         if key == 0:
-            name_setter.append(f'Reference Genotype ({key})')
+            name_setter.append(f'REF Genotype ({len(group)} accesions)')
             name_setter_index.append(i + 1)
         elif key == 1:
-            name_setter.append(f'Alternative Genotype ({key})')
+            name_setter.append(f'ALT Genotype ({len(group)}accesions)')
             name_setter_index.append(i + 1)
+        counts_per_group.append(len(group))
 
         # jitered x values:
         x = np.random.normal(i + 1, 0.02, size=len(group))
@@ -334,10 +339,10 @@ def boxplot(genotype_df, phenotype_df):
 
     #adding a legend
     legend_elements = [
-        plt.Line2D([0], [0], marker='o', color='w', label='Elite', markerfacecolor='blue', markersize=10),
-        plt.Line2D([0], [0], marker='o', color='w', label='G. soja', markerfacecolor='green', markersize=10),
-        plt.Line2D([0], [0], marker='o', color='w', label='Genetic', markerfacecolor='red', markersize=10),
-        plt.Line2D([0], [0], marker='o', color='w', label='Landrace', markerfacecolor='purple', markersize=10)
+        plt.Line2D([0], [0], marker='o', color='w', label='Elite', markerfacecolor='blue', alpha = 0.5, markersize=10),
+        plt.Line2D([0], [0], marker='o', color='w', label='G. soja', markerfacecolor='green', alpha = 0.5, markersize=10),
+        plt.Line2D([0], [0], marker='o', color='w', label='Genetic', markerfacecolor='red', alpha = 0.5, markersize=10),
+        plt.Line2D([0], [0], marker='o', color='w', label='Landrace', markerfacecolor='purple', alpha = 0.5, markersize=10)
     ]
     ax.legend(handles=legend_elements, loc='upper right', fontsize='large')
 
@@ -383,7 +388,7 @@ accesions_without_phenotype = len(result_df)
 histogram(phenotype_df)
 boxplot(binarised_genotype_df, phenotype_df)
 
-print(f'Number of accesions that coul not be matched to phenotype value: {accesions_without_phenotype}.')
+print(f'Number of accesions that could not be matched to phenotype value: {accesions_without_phenotype}.')
 print(f"The phenotype file contains {len(phenotype_df.Phenotype)} samples.")
 print(f"The MINIMAL VALUE of the trait is:   {stats['min']:.2f}.")
 print(f"The MAXIMAL VALUE of the trait is:   {stats['max']:.2f}.")
