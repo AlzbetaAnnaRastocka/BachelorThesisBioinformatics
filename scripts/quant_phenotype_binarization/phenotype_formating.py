@@ -248,7 +248,7 @@ def histogram(df):
     kde_values = kernel_density_estimation(data, x_grid, bandwidth) # array of n elements
 
     # Histogram and KDE function calculations
-    counts, bin_edges = np.histogram(data, bins='auto')  
+    counts, bin_edges = np.histogram(data, bins='auto') 
     bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
     bin_width = bin_edges[1] - bin_edges[0]
     kde_values = kde_values * len(data) * bin_width  # scale kde values, becaus it is a probability density function, but we represent histogram by counts of accesions in each bin not the probability
