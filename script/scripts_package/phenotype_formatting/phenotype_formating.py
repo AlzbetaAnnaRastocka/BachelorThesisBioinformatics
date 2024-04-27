@@ -2,10 +2,11 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
 import ast
-import itertools
 
+# global list to store name of functions and its string representation
 function_list = []
 info_strings = []
+
 def register_with_info(info):
     ''''Decorator factory that creates a decorator which registers a function and an info string. '''
     def decorator(function):
@@ -151,7 +152,7 @@ def binarisation_by_third_quartile(df, statistics, flip):
 def generate_combinations(ones, zeros):
     combinations = []
 
-    # Helper function to generate all continuous sub-sequences of a list
+    # Helper function to generate all continuous sub-sequences of a list - [0, I, II] -> [(0), (0,I), (I,II), (0, I, II)]
     def continuous_combinations(items):
         return [items[start:end+1] for start in range(len(items)) for end in range(start, len(items))]
 

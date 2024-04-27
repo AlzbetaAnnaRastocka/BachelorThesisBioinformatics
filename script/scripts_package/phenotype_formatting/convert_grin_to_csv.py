@@ -12,9 +12,10 @@ def main(config):
     df['accession_number'] = df['accession_number'].fillna('')
     df['accession_suffix'] = df['accession_suffix'].fillna('')
 
-    # unite 'accession_prefix' and 'accesion_number' into one 'GRIN_Accession' column to obtain single value without separator example: PI587848
+    # unite 'accession_prefix', accesion_number' and 'accession_suffix' into one 'GRIN_Accession' column to obtain single value without separator example: PI587848T
     df['GRIN_Accession'] = df['accession_prefix'].astype(str) + df['accession_number'].astype(str) + df['accession_suffix'].astype(str)
 
+    # check if config contain setting with name phenotype_categories, if not, group duplicated values and calculate mean
     try:
         config["phenotype_categories"]
         df_new = df[['GRIN_Accession', 'observation_value']]
