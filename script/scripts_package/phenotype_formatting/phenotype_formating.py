@@ -168,7 +168,7 @@ def generate_combinations(ones, zeros):
     return combinations
 
 # _____________________________________________ #5 all combinations for binariation  _____________________________________________
-def binarisation_combinations (genotype_df, phenotype_df, phenotype_categories = None):
+def binarisation_combinations (binarised_genotype_df, phenotype_df, phenotype_categories = None):
     '''
     Evaluates and identifies the best binarization method for phenotype data based on quantile intervals to maximize the correspondence with binarized genotype data.
     The function explores all possible pairs of quantile intervals (excluding identical pairs) to determine which combination yields the highest accuracy. 
@@ -180,7 +180,12 @@ def binarisation_combinations (genotype_df, phenotype_df, phenotype_categories =
     accuracies = dict()
     dictionary_index = 0
            
-    if phenotype_categories:
+    if phenotype_categories: #this is branch for categorical data analysis only
+        filtered_df = pd.merge(phenotype_df, binarised_genotype_df, on="Sample")
+        categories_count_dict = filtered_df['Phenotype'].value_counts().to_dict() # the number of accesions in each category for our merged data
+        #print(categories_count_dict)
+        number_of_data_in_analysis = sum(categories_count_dict.values()) # the number of all accesions in the current analysis
+        print(number_of_data_in_analysis)
         for segment_zeros in phenotype_categories:
             for segment_ones in phenotype_categories:
                 if segment_zeros == segment_ones:
@@ -195,8 +200,6 @@ def binarisation_combinations (genotype_df, phenotype_df, phenotype_categories =
                     df_copy2 = df_copy.copy() # Create second copy to store binarised phenotype. 1st copy is used for other combinations
                     df_copy2['Phenotype'] = np.select(conditions, choices, default = -2)
 
-                    #df_copy['Binarized Phenotype'] = np.select(conditions, choices, default=-2)
-                    # Forming the string
                     info_string = f"Category for 0s: {segment_zeros}, \nCategory for 1s: {segment_ones}\n"
 
                     # Updating the dictionary with a tuple containing the dataframe slice and the string
@@ -205,9 +208,9 @@ def binarisation_combinations (genotype_df, phenotype_df, phenotype_categories =
 
         for key, value in combinations_for_binarisation_dict.items():
             # value is a tuple where value[0] is the dataframe and value[1] is the string, value[2] is segment 0 and value[3] is segment ones 
-            accuracy = average_accuracy_from_dataframes(genotype_df, value[0])
-
-            accuracies.update({key: accuracy})
+            accuracy = average_accuracy_from_dataframes(binarised_genotype_df, value[0])
+            categories_coverage = ((categories_count_dict[value[2]] + categories_count_dict[value[3]])/number_of_data_in_analysis)*100
+            accuracies.update({key: (accuracy, categories_coverage)})
     
         key_with_highest_value = max(accuracies, key=accuracies.get)
         value_best = combinations_for_binarisation_dict[key_with_highest_value]
@@ -223,16 +226,9 @@ def binarisation_combinations (genotype_df, phenotype_df, phenotype_categories =
         array_ones = get_segment_with_neighbors(segment_ones, phenotype_categories)
         array_zeros = get_segment_with_neighbors(segment_zeros, phenotype_categories)
 
-        # Example usage
-        # print("Ones with neighbors:", array_ones)
-        # print("Zeros with neighbors:", array_zeros)
-        
         combinations = generate_combinations(array_ones, array_zeros)
 
-        # # Print out the valid combinations
-        # for comb in combinations:
-        #     print("Ones:", comb[0], "Zeros:", comb[1])
-
+        combinations_dictionary_index_start = dictionary_index
 
         # Binarise using generated combinations
         for zero_comb, one_comb in combinations:
@@ -248,20 +244,24 @@ def binarisation_combinations (genotype_df, phenotype_df, phenotype_categories =
             combinations_for_binarisation_dict.update({dictionary_index: (df_copy2, info_string, zero_comb, one_comb)})
             dictionary_index += 1
 
-        for key, value in combinations_for_binarisation_dict.items():
+        # multi group categories accuracy computation 
+        for key in range (combinations_dictionary_index_start, dictionary_index):
+            value = combinations_for_binarisation_dict[key]
             # value is a tuple where value[0] is the dataframe and value[1] is the string, value[2] is segment 0 and value[3] is segment ones 
-            accuracy = average_accuracy_from_dataframes(genotype_df, value[0])
+            accuracy = average_accuracy_from_dataframes(binarised_genotype_df, value[0])
+            
+            sum_of_categories = 0
 
-            accuracies.update({key: accuracy})
-            # print(accuracy) 
-            # print(value[2]) 
-            # print(value[3]) 
-            # print() 
+            for cat in value[2] + value[3]:
+                sum_of_categories += categories_count_dict[cat]
+            categories_coverage = (sum_of_categories/number_of_data_in_analysis)*100
+
+            accuracies.update({key: (accuracy, categories_coverage)})
     
-        key_with_highest_value = max(accuracies, key=accuracies.get)
+        key_with_highest_value = max(accuracies, key=lambda k: accuracies[k][0])
         value_best = combinations_for_binarisation_dict[key_with_highest_value]
 
-    else:
+    else: #this is branch for quantitative data analysis only
         interval = 10
         for segment_zeros in range(0, 100, interval):
             for segment_ones in range(0, 100, interval):
@@ -293,15 +293,21 @@ def binarisation_combinations (genotype_df, phenotype_df, phenotype_categories =
         
         for key, value in combinations_for_binarisation_dict.items():
             # value is a tuple where value[0] is the dataframe and value[1] is the string       
-            accuracy = average_accuracy_from_dataframes(genotype_df, value[0])
+            accuracy = average_accuracy_from_dataframes(binarised_genotype_df, value[0])
 
-            accuracies.update({key: accuracy})
+            accuracies.update({key: (accuracy, interval*2)})
     
-    
+    sorted_accuracies = sorted(accuracies.items(), key=lambda x: x[1][0], reverse=True) # sort the dictionary by the values of accuracies, descending order
 
-    key_with_highest_value = max(accuracies, key=accuracies.get)
-    value_best = combinations_for_binarisation_dict[key_with_highest_value]
-    print(f' \033[94m Key with the highest value: {key_with_highest_value}, Value: {accuracies[key_with_highest_value]}, {value_best[1]} \33[37m')
+    # the number of top values
+    top_n = 50 # Change this to the desired number
+
+    # Print the top N highest values along with their keys and additional information
+    for i in range(top_n):
+        key_with_highest_value = sorted_accuracies[i][0]
+        value_best = combinations_for_binarisation_dict[key_with_highest_value]
+        print(f' \033[94m Key with the highest value: {key_with_highest_value}, Value: {accuracies[key_with_highest_value]}, {value_best[1]} \33[37m')
+
 
 # _____________________________________________ average accuracy _____________________________________________
 
@@ -327,7 +333,7 @@ def average_accuracy_from_dataframes(genotype_dataframe, phenotype_dataframe):
     return (acc_MUT + acc_WT) / 2
 
 # _____________________________________________ histogram _____________________________________________
-def histogram(df):
+def histogram(name, df):
     ''' Create and plot the histogram for the phenotype data and analyze number of modes and the local maximums'''
     
     # We will also analyze the distribution, if the distribution is multimodal we want to detect modes and local maxims/ minims 
@@ -404,7 +410,7 @@ def histogram(df):
     plt.xlabel('Phenotype Values')
     plt.ylabel('Frequency')
     plt.title('Distribution of trait values')
-    plt.savefig("histogram.png", dpi=300, bbox_inches='tight')
+    plt.savefig(f"{name}.png", dpi=300, bbox_inches='tight')
     # plt.show()
     print(f'Detected number of modes in histogram is: {len(refined_peaks)} with the peak frequency values:{counts[refined_peaks]}.')
 
@@ -514,7 +520,7 @@ def load_configurations(file_path):
 # _____________________________________________CATEGORICAL BARPLOT _____________________________________________
 
 def barplot(name, df, categories_ordered):
-    """Create and plot the histogram for the phenotype data."""
+    """Create and plot the barplot for the phenotype data."""
     plt.figure(figsize=(10, 6))
     df['Phenotype'] = pd.Categorical(df['Phenotype'], categories = categories_ordered, ordered=True)
     ax = df['Phenotype'].value_counts().sort_index().plot(kind='bar', color='#93BFCF', edgecolor='#6096B4', linewidth=1.5, alpha=0.5)
@@ -533,20 +539,6 @@ def barplot(name, df, categories_ordered):
                      textcoords='offset points')  # How the text is positioned
     plt.savefig(f"{name}.png", dpi=300, bbox_inches='tight')
     # plt.show()
-
-# _____________________________________________CATEGORICAL PHENOTYPE BINARISATION _____________________________________________
-
-# cat Phenotype binarisation
-def categorical_phenotype_binarisation(df):
-    df_copy = df.copy()
-    conditions = [
-        df_copy['Phenotype'].isin(['IV']),
-        df_copy['Phenotype'].isin(['000', '00', '0']),
-    ]
-    choices = [0, 1]
-    df_copy['Phenotype'] = np.select(conditions, choices, default = -2)
-
-    return df_copy
 
 
 # _____________________________________________ MAIN _____________________________________________
@@ -581,17 +573,11 @@ def main(config):
 
         # Plot the barplot
         barplot("grin_phenotype_barplot", phenotype_df, phenotype_categories)
-        new_df = pd.merge(phenotype_df, binarised_genotype_df, on="Sample")
-        barplot("filtered_phenotype_barplot", new_df, phenotype_categories)
+        filtered_df = pd.merge(phenotype_df, binarised_genotype_df, on="Sample")
+        barplot("filtered_phenotype_barplot", filtered_df, phenotype_categories)
 
-        binarised_phenotype_df = categorical_phenotype_binarisation(phenotype_df)
-
-        print(average_accuracy_from_dataframes(binarised_genotype_df, binarised_phenotype_df))
-
+        # Convert the Series object to a dictionary
         binarisation_combinations(binarised_genotype_df, phenotype_df, phenotype_categories)
-
-        # Plot the barplot
-        # barplot(phenotype_df)
 
         pass
 
@@ -611,7 +597,9 @@ def main(config):
         accesions_without_phenotype = len(result_df)
 
         # OUTPUT
-        histogram(phenotype_df)
+        histogram('grin_histogram', phenotype_df)
+        filtered_df = pd.merge(phenotype_df, binarised_genotype_df, on="Sample")
+        histogram("filtered_phenotype_histogram", filtered_df)
         boxplot(binarised_genotype_df, phenotype_df)
 
         print(f'Number of accesions that could not be matched to phenotype value: {accesions_without_phenotype}.')
