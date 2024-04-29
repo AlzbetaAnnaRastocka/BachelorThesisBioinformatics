@@ -185,6 +185,7 @@ def binarisation_combinations (binarised_genotype_df, phenotype_df, phenotype_ca
         categories_count_dict = filtered_df['Phenotype'].value_counts().to_dict() # the number of accesions in each category for our merged data
         #print(categories_count_dict)
         number_of_data_in_analysis = sum(categories_count_dict.values()) # the number of all accesions in the current analysis
+        COVERAGE_THRESHOLD = number_of_data_in_analysis * 0.05
         print(number_of_data_in_analysis)
         for segment_zeros in phenotype_categories:
             for segment_ones in phenotype_categories:
@@ -203,21 +204,25 @@ def binarisation_combinations (binarised_genotype_df, phenotype_df, phenotype_ca
                     info_string = f"Category for 0s: {segment_zeros}, \nCategory for 1s: {segment_ones}\n"
 
                     # Updating the dictionary with a tuple containing the dataframe slice and the string
-                    combinations_for_binarisation_dict.update({ dictionary_index: (df_copy2, info_string, segment_zeros, segment_ones)})
+                    coverage = categories_count_dict[segment_zeros] + categories_count_dict[segment_ones]
+                    coverage_restricted = -1 if (categories_count_dict[segment_zeros] < COVERAGE_THRESHOLD) or (categories_count_dict[segment_ones] < COVERAGE_THRESHOLD) else coverage
+                    combinations_for_binarisation_dict.update({ dictionary_index: (df_copy2, info_string, segment_zeros, segment_ones, coverage_restricted, coverage)})
                     dictionary_index += 1
 
+        key_with_highest_coverage = max(combinations_for_binarisation_dict, key = lambda k: combinations_for_binarisation_dict[k][5])
+        max_coverage = combinations_for_binarisation_dict[key_with_highest_coverage][5]
         for key, value in combinations_for_binarisation_dict.items():
             # value is a tuple where value[0] is the dataframe and value[1] is the string, value[2] is segment 0 and value[3] is segment ones 
-            accuracy = average_accuracy_from_dataframes(binarised_genotype_df, value[0])
-            categories_coverage = ((categories_count_dict[value[2]] + categories_count_dict[value[3]])/number_of_data_in_analysis)*100
-            accuracies.update({key: (accuracy, categories_coverage)})
+            accuracy = average_accuracy_from_dataframes(binarised_genotype_df, value[0], value[4],  max_coverage)
+
+            accuracies.update({key: accuracy })
     
-        key_with_highest_value = max(accuracies, key=accuracies.get)
+        key_with_highest_value = max(accuracies, key = lambda k: accuracies[k][0])
         value_best = combinations_for_binarisation_dict[key_with_highest_value]
         
         
         segment_zeros, segment_ones = value_best[2], value_best[3] 
-        neighbors = 3
+        neighbors = 2
         def get_segment_with_neighbors(segment, categories):
             idx = categories.index(segment)
             # Get neighbors; check if the index is not out of the range
@@ -241,22 +246,32 @@ def binarisation_combinations (binarised_genotype_df, phenotype_df, phenotype_ca
             df_copy2['Phenotype'] = np.select(conditions, choices, default=-2)
 
             info_string = f"Category for 0s: {zero_comb}, \nCategory for 1s: {one_comb}\n"
-            combinations_for_binarisation_dict.update({dictionary_index: (df_copy2, info_string, zero_comb, one_comb)})
+
+            coverage = left_segment = right_segment = 0
+            
+            for cat in zero_comb:
+                cat_coverage = categories_count_dict[cat]
+                coverage += cat_coverage
+                left_segment += -10000 if cat_coverage == 0 else cat_coverage
+            for cat in one_comb:
+                cat_coverage = categories_count_dict[cat]
+                coverage += cat_coverage
+                right_segment += -10000 if cat_coverage == 0 else cat_coverage
+            coverage_restricted = -1 if (left_segment < COVERAGE_THRESHOLD) or (right_segment < COVERAGE_THRESHOLD) else coverage
+
+            combinations_for_binarisation_dict.update({dictionary_index: (df_copy2, info_string, zero_comb, one_comb, coverage_restricted, coverage)})
             dictionary_index += 1
 
         # multi group categories accuracy computation 
+        key_with_highest_coverage = max(combinations_for_binarisation_dict, key = lambda k: combinations_for_binarisation_dict[k][5])
+        max_coverage = combinations_for_binarisation_dict[key_with_highest_coverage][5]
         for key in range (combinations_dictionary_index_start, dictionary_index):
             value = combinations_for_binarisation_dict[key]
-            # value is a tuple where value[0] is the dataframe and value[1] is the string, value[2] is segment 0 and value[3] is segment ones 
-            accuracy = average_accuracy_from_dataframes(binarised_genotype_df, value[0])
             
-            sum_of_categories = 0
+            # value is a tuple where value[0] is the dataframe and value[1] is the string, value[2] is segment 0 and value[3] is segment ones, value[4] is coverage restricted which is -1 if coverage of one segment is less than threshold 
+            accuracy = average_accuracy_from_dataframes(binarised_genotype_df, value[0], value[4], max_coverage)
 
-            for cat in value[2] + value[3]:
-                sum_of_categories += categories_count_dict[cat]
-            categories_coverage = (sum_of_categories/number_of_data_in_analysis)*100
-
-            accuracies.update({key: (accuracy, categories_coverage)})
+            accuracies.update({key: accuracy })
     
         key_with_highest_value = max(accuracies, key=lambda k: accuracies[k][0])
         value_best = combinations_for_binarisation_dict[key_with_highest_value]
@@ -293,25 +308,32 @@ def binarisation_combinations (binarised_genotype_df, phenotype_df, phenotype_ca
         
         for key, value in combinations_for_binarisation_dict.items():
             # value is a tuple where value[0] is the dataframe and value[1] is the string       
-            accuracy = average_accuracy_from_dataframes(binarised_genotype_df, value[0])
+            accuracy = average_accuracy_from_dataframes(binarised_genotype_df, value[0], 0, 1)
 
             accuracies.update({key: (accuracy, interval*2)})
     
-    sorted_accuracies = sorted(accuracies.items(), key=lambda x: x[1][0], reverse=True) # sort the dictionary by the values of accuracies, descending order
+    sorted_accuracies_by_weighted_accuracy = sorted(accuracies.items(), key=lambda x: x[1][1], reverse=True) # sort the dictionary by the values of weighted accuracies, descending order
+    sorted_accuracies = sorted(accuracies.items(), key=lambda x: x[1][0], reverse=True) # sort the dictionary by the values of weighted accuracies, descending order
 
     # the number of top values
-    top_n = 50 # Change this to the desired number
+    top_n = 5 # Change this to the desired number
 
-    # Print the top N highest values along with their keys and additional information
+    # Print the top N highest values by accuracy along with their keys and additional information
     for i in range(top_n):
         key_with_highest_value = sorted_accuracies[i][0]
         value_best = combinations_for_binarisation_dict[key_with_highest_value]
-        print(f' \033[94m Key with the highest value: {key_with_highest_value}, Value: {accuracies[key_with_highest_value]}, {value_best[1]} \33[37m')
+        print(f' \033[94m Key with the highest value: {key_with_highest_value}, Value: {accuracies[key_with_highest_value]}, \n{value_best[1]} \33[37m')
+
+    # Print the top N highest values by weighted accuracy along with their keys and additional information
+    for i in range(top_n):
+        key_with_highest_value = sorted_accuracies_by_weighted_accuracy[i][0]
+        value_best = combinations_for_binarisation_dict[key_with_highest_value]
+        print(f' \033[91m Key with the highest value: {key_with_highest_value}, Value: {accuracies[key_with_highest_value]}, \n{value_best[1]} \33[37m')
 
 
 # _____________________________________________ average accuracy _____________________________________________
 
-def average_accuracy_from_dataframes(genotype_dataframe, phenotype_dataframe):
+def average_accuracy_from_dataframes(genotype_dataframe, phenotype_dataframe, coverage_restricted, max_coverage):
     '''
     Compute the average accuracy of genotype-phenotype associations for mutant and wild type classes.
     accuracy formula: average accuracy = (MUT_acc + WT_acc) / 2
@@ -330,7 +352,14 @@ def average_accuracy_from_dataframes(genotype_dataframe, phenotype_dataframe):
     acc_MUT = 0 if (N_MUTcorrect + N_MUTincorrect) == 0 else (N_MUTcorrect / (N_MUTcorrect + N_MUTincorrect)) * 100
 
     # average accuracy formula
-    return (acc_MUT + acc_WT) / 2
+    avg_acc = (acc_MUT + acc_WT) / 2
+
+    coverage_impact = -4 if (coverage_restricted / max_coverage) < 0 else np.log10((coverage_restricted / max_coverage) + 1) # Logarithmic scale to reduce impact
+    # print(coverage_impact)
+
+    accuracy_weighted = avg_acc * (0.8 + 0.2 * coverage_impact) # Balance the contribution, the higher the second coeficient is the higher coverage 
+
+    return (avg_acc, accuracy_weighted)
 
 # _____________________________________________ histogram _____________________________________________
 def histogram(name, df):
@@ -581,13 +610,13 @@ def main(config):
 
         pass
 
-    else:
+    else: # quantitative branch
         stats = compute_statistics(phenotype_df)
 
         for function, info in zip(function_list, info_strings):
             binarised_phenotype_df = function(phenotype_df, stats, flip)
-            avg = average_accuracy_from_dataframes(binarised_genotype_df, binarised_phenotype_df)
-            print(f'{info}{avg:.2f}%')
+            avg = average_accuracy_from_dataframes(binarised_genotype_df, binarised_phenotype_df, 0, 1)
+            print(f'{info}{avg[0]:.2f}%')
 
         binarisation_combinations(binarised_genotype_df, phenotype_df)
 
